@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Raspberry Pi Data Exchange Client</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f4f7f9; }
+        .card { box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); }
+        .btn-primary { transition: background-color 0.15s ease-in-out; }
+        .btn-primary:hover { background-color: #1a4a80; }
+        .status-box { min-height: 100px; }
+    </style>
+</head>
+<body class="p-4 sm:p-8 flex justify-center items-start min-h-screen">
+
+    <div class="w-full max-w-2xl bg-white p-6 sm:p-8 rounded-xl card">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6 border-b pb-2">Raspberry Pi Data Connector</h1>
+        
+        <!-- Configuration and Status -->
+        <div class="mb-8">
+            <p class="text-sm font-semibold text-red-600 mb-2">IMPORTANT: The `API_URL` below must be manually updated to your Pi's IP address.</p>
+            <p class="text-gray-600 text-sm">Example IP: `http://192.168.1.50:5000`</p>
+            <div id="pi-ip-display" class="font-mono bg-gray-100 p-3 rounded-lg text-sm mt-2 break-all">
+                Loading...
+            </div>
+        </div>
+
+        <!-- 1. GET Data from Pi -->
+        <div class="mb-8 p-4 bg-blue-50 rounded-lg">
+            <h2 class="text-xl font-semibold text-blue-800 mb-3">1. Get Data (GET Request)</h2>
+            <button id="get-data-btn" class="btn-primary w-full px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50" onclick="getData()">
+                Fetch Pi Status
+            </button>
+            <div id="get-result" class="status-box mt-4 p-4 bg-white border border-blue-200 rounded-lg font-mono text-sm text-gray-700 whitespace-pre-wrap">
+                Click 'Fetch Pi Status' to see the data.
+            </div>
+        </div>
+
+        <!-- 2. Send Data to Pi -->
+        <div class="p-4 bg-green-50 rounded-lg">
+            <h2 class="text-xl font-semibold text-green-800 mb-3">2. Send Data (POST Request)</h2>
+            <input type="text" id="command-input" placeholder="Enter new status message (e.g., 'LED is ON')" class="w-full p-3 border border-gray-300 rounded-lg mb-3 focus:ring-green-500 focus:border-green-500">
+            <button id="send-command-btn" class="btn-primary w-full px-4 py-2 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-opacity-50" onclick="sendCommand()">
+                Send Command to Pi
+            </button>
+            <div id="post-result" class="status-box mt-4 p-4 bg-white border border-green-200 rounded-lg font-mono text-sm text-gray-700 whitespace-pre-wrap">
+                Command response will appear here.
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // *** CRITICAL: Replace 'YOUR_PI_LOCAL_IP' with the actual IP of your Raspberry Pi. ***
+        // Example: If your Pi's IP is 192.168.1.50, use 'http://192.168.1.50:5000'
+        const PI_IP = "192.168.0.128"; 
+        const API_URL = `http://${PI_IP}:5000`;
+
+        document.getElementById('pi-ip-display').textContent = `API Base URL: ${API_URL}`;
+
+        // Helper function for exponential backoff retry logic
+        async function fetchWithRetry(url, options = {}, retries = 3) {
+            for (let i = 0; i < retries; i++) {
+                try {
+                    const response = await fetch(url, options);
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! Status: ${response.status}`);
+                    }
+                    return response.json();
+                } catch (error) {
+                    if (i === retries - 1) throw error; // Re-throw on last attempt
+                    const delay = Math.pow(2, i) * 1000; // Exponential backoff (1s, 2s, 4s)
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+        async function getData() {
+            const resultDiv = document.getElementById('get-result');
+            resultDiv.textContent = 'Fetching data...';
+            
+            try {
+                const data = await fetchWithRetry(`${API_URL}/api/status`);
+                
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+            } catch (error) {
+                resultDiv.textContent = `ERROR: Could not connect to Raspberry Pi.\n\nMake sure:
+1. 'pi_server.py' is running on your Pi.
+2. The 'PI_IP' variable in this script is correct.
+3. Your firewall is not blocking port 5000.`;
+                console.error('Fetch error:', error);
+            }
+        }
+
+        async function sendCommand() {
+            const input = document.getElementById('command-input');
+            const message = input.value.trim();
+            const resultDiv = document.getElementById('post-result');
+            
+            if (!message) {
+                resultDiv.textContent = "Please enter a message to send.";
+                return;
+            }
+
+            resultDiv.textContent = 'Sending command...';
+
+            const payload = {
+                new_message: message
+            };
+
+            const options = {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            };
+
+            try {
+                const data = await fetchWithRetry(`${API_URL}/api/command`, options);
+                
+                resultDiv.textContent = JSON.stringify(data, null, 2);
+                input.value = ''; // Clear input on success
+            } catch (error) {
+                resultDiv.textContent = `ERROR: Failed to send command.\n\nDetails: ${error.message}`;
+                console.error('POST error:', error);
+            }
+        }
+
+        // Initialize display with a helpful message
+        document.addEventListener('DOMContentLoaded', () => {
+            if (PI_IP === "YOUR_PI_LOCAL_IP") {
+                 document.getElementById('get-result').textContent = "Configuration needed! Please update the 'PI_IP' variable in the script tag.";
+                 document.getElementById('post-result').textContent = "Configuration needed! Please update the 'PI_IP' variable in the script tag.";
+            }
+        });
+    </script>
+</body>
+</html>
